@@ -1,1 +1,4 @@
 .env
+scripts/.envrc
+data/donor_data/
+scripts/donorperfect/.envrc
