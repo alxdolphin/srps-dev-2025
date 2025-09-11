@@ -2,3 +2,6 @@
 scripts/.envrc
 data/donor_data/
 scripts/donorperfect/.envrc
+scripts/donorperfect/.direnv/nix-profile-25.11-4bdm5fcwix168v4l
+scripts/donorperfect/.direnv/nix-profile-25.11-4bdm5fcwix168v4l.rc
+scripts/donorperfect/.direnv/bin/nix-direnv-reload
