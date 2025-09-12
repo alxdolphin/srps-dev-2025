@@ -1,7 +1,70 @@
+# Environment variables
 .env
+.env.local
+.env.*.local
+
+# Data files
+data/raw/*.csv
+data/raw/*.xml
+data/raw/*.json
+data/processed/*.csv
+data/processed/*.xml
+data/processed/*.json
+
+# Temporary files
+*.tmp
+*.temp
+donors_raw_*.xml
+test_response.xml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Google Colab
+.ipynb_checkpoints/
+
+# Apps Script
+.gas/
+scripts/.direnv/nix-profile-25.11-4bdm5fcwix168v4l
+scripts/.direnv/nix-profile-25.11-4bdm5fcwix168v4l.rc
+scripts/.direnv/bin/nix-direnv-reload
 scripts/.envrc
-data/donor_data/
-scripts/donorperfect/.envrc
-scripts/donorperfect/.direnv/nix-profile-25.11-4bdm5fcwix168v4l
-scripts/donorperfect/.direnv/nix-profile-25.11-4bdm5fcwix168v4l.rc
-scripts/donorperfect/.direnv/bin/nix-direnv-reload
