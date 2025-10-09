@@ -68,3 +68,10 @@ scripts/.direnv/nix-profile-25.11-4bdm5fcwix168v4l
 scripts/.direnv/nix-profile-25.11-4bdm5fcwix168v4l.rc
 scripts/.direnv/bin/nix-direnv-reload
 scripts/.envrc
+.envrc
+.direnv/nix-profile-25.11-lsdw9m87nam4syiy
+.direnv/nix-profile-25.11-lsdw9m87nam4syiy.rc
+.direnv/bin/nix-direnv-reload
+coursemap/docs/notes.md
+.direnv/nix-profile-25.11-ybmnblw90230yl4p
+.direnv/nix-profile-25.11-ybmnblw90230yl4p.rc
