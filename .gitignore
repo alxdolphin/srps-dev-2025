@@ -15,7 +15,7 @@ data/processed/*.json
 *.tmp
 *.temp
 donors_raw_*.xml
-test_response.xml
+test_response.xmlle
 
 # Python
 __pycache__/
@@ -77,3 +77,4 @@ coursemap/docs/notes.md
 .direnv/nix-profile-25.11-ybmnblw90230yl4p.rc
 .direnv/nix-profile-25.11-zr39xqx6sdaqjbm9
 .direnv/nix-profile-25.11-zr39xqx6sdaqjbm9.rc
+run_leads_ids_names.txt
