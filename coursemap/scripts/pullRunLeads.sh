@@ -4,8 +4,8 @@ set -euo pipefail
 API_TOKEN="${COURSEMAP_API_TOKEN:?COURSEMAP_API_TOKEN not set}"
 BASE_URL="${COURSEMAP_API_URL:?COURSEMAP_API_URL not set}"
 
-OUT_FORMAT="${1:-ids}"  # json|csv|ids
-OUTFILE="run_leads_ids_names.txt"
+OUT_FORMAT="${1:-csv}"  # json|csv|ids
+OUTFILE="data/export/run_leads_ids_names.csv"
 
 # Accept optional second argument: active param (default: empty, i.e., all)
 ACTIVE_FILTER="${2:-}"
@@ -32,6 +32,9 @@ if [ "$users_count" -eq 0 ]; then
   printf '%s' "$response" | jq -r '.message? // .error? // .errors? // empty' 1>&2 || true
 fi
 
+# ensure output directory exists
+mkdir -p "$(dirname "$OUTFILE")"
+
 # Clear the output file before writing
 : > "$OUTFILE"
 
@@ -43,8 +46,9 @@ printf '%s\n' "$response" | jq -c '
   id=$(echo "$user" | jq -r '.id')
   first_name=$(echo "$user" | jq -r '.first_name // ""')
   last_name=$(echo "$user" | jq -r '.last_name // ""')
+  email=$(echo "$user" | jq -r '.email // ""')
   # Output id and name to OUTFILE in format: id,first_name,last_name
-  echo "$id,$first_name,$last_name" >> "$OUTFILE"
+  echo "$id,$first_name,$last_name,$email" >> "$OUTFILE"
 
   case "$OUT_FORMAT" in
     csv)
@@ -78,4 +82,4 @@ printf '%s\n' "$response" | jq -c '
   esac
 done
 
-echo "Wrote list of IDs and names to $OUTFILE" >&2
+echo "Wrote list of IDs, names, and emails to $OUTFILE" >&2
