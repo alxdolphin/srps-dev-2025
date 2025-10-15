@@ -78,3 +78,8 @@ coursemap/docs/notes.md
 .direnv/nix-profile-25.11-zr39xqx6sdaqjbm9
 .direnv/nix-profile-25.11-zr39xqx6sdaqjbm9.rc
 run_leads_ids_names.txt
+data/export/run_leads_ids_names.csv
+data/export/run_leads_ids_names.csv
+data/export/run_leads_ids_names.csv
+export-to-excel
+data/export/run_leads_ids_names.csv
