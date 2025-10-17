@@ -12,20 +12,20 @@ ACTIVE_FILTER="${2:-}"
 
 call_get_leaders_all() {
   local url="$BASE_URL/users/get-leaders"
-  local params="api_token=$API_TOKEN&page=all"
+  local params="page=all"
   # Only append active param if provided (can be "1", "0", "true", "false" etc)
   if [ -n "$ACTIVE_FILTER" ]; then
     params="$params&active=$ACTIVE_FILTER"
   fi
   # do NOT add team_id, so pulls all teams
-  curl -s "$url?$params" -H "Accept: application/json"
+  curl -s "$url?$params" -H "Accept: application/json" -H "Authorization: Bearer $API_TOKEN"
 }
 
 # Output each user record to stdout as soon as it's pulled and processed
 response="$(call_get_leaders_all)"
 
 # basic diagnostic if no users found in common response shapes
-users_count="$(printf '%s' "$response" | jq -r '((.data.users // .users // .data.data // .data // []) | length)')"
+users_count="$(printf '%s' "$response" | jq -r '((.data.users //  .users // .data.data // .data // []) | length)')"
 if [ "$users_count" -eq 0 ]; then
   echo "no users found; response did not include a users array" >&2
   # try to surface any server-provided message
@@ -47,8 +47,31 @@ printf '%s\n' "$response" | jq -c '
   first_name=$(echo "$user" | jq -r '.first_name // ""')
   last_name=$(echo "$user" | jq -r '.last_name // ""')
   email=$(echo "$user" | jq -r '.email // ""')
-  # Output id and name to OUTFILE in format: id,first_name,last_name
-  echo "$id,$first_name,$last_name,$email" >> "$OUTFILE"
+  # derive active status (boolean/numeric/string), mirroring server semantics
+  active_label=$(echo "$user" | jq -r '
+    def as_bool($v):
+      if ($v|type) == "boolean" then $v
+      elif ($v|type) == "number" then ($v != 0)
+      else ((($v|tostring|ascii_downcase) == "true") or (($v|tostring|ascii_downcase) == "1") or (($v|tostring|ascii_downcase) == "active")) end;
+    if (.is_active? != null) then (if as_bool(.is_active) then "active" else "inactive" end)
+    elif (.status? != null) then (if ((.status | tostring | ascii_downcase) == "active") then "active" else "inactive" end)
+    elif (.active? != null) then (if as_bool(.active) then "active" else "inactive" end)
+    else "inactive" end')
+  # Output id, name, email, and status to OUTFILE in format: id,first_name,last_name,email,status
+  echo "$id,$first_name,$last_name,$email,$active_label" >> "$OUTFILE"
+
+  # optional debug: show how status was derived for first few entries when DEB UG=1
+  if [ "${DEBUG:-}" = 1 ] && [ -z "${_DEBUG_PRINTED:-}" ]; then
+    {
+      echo "debug: id=$id name=$first_name $last_name email=$email"
+      echo "$user" | jq -r '{
+        id, first_name, last_name, email,
+        is_active, active, status, status_id, user_status, leader_status, employment_status, state, current_status
+      }'
+      echo "computed_status=$active_label"
+    } >&2
+    _DEBUG_PRINTED=1
+  fi
 
   case "$OUT_FORMAT" in
     csv)

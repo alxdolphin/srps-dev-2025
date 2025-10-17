@@ -779,3 +779,127 @@ function debugGiftsForDonor(donorId) {
   });
 }
 
+
+function fetchRunningLeaders(token) {
+  var baseUrl = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_URL'))
+    || 'https://api.studentsrunphilly.org/api/v2';
+  var resolvedToken = token
+    || (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_TOKEN'))
+    || '';
+
+  if (!resolvedToken) {
+    throw new Error('set COURSEMAP_API_TOKEN in script properties or pass token to fetchRunningLeaders(token)');
+  }
+
+  var url = baseUrl + '/users/get-leaders';
+  var options = {
+    method: 'get',
+    headers: {
+      'Authorization': 'Bearer ' + resolvedToken,
+      'Accept': 'application/json'
+    },
+    muteHttpExceptions: true
+  };
+
+  var response = UrlFetchApp.fetch(url, options);
+  var status = response.getResponseCode();
+  var body = response.getContentText();
+  if (status < 200 || status >= 300) {
+    throw new Error('coursemap get-leaders failed: ' + status + ' ' + body, url, options);
+  }
+
+  var parsed = JSON.parse(body || '{}');
+  var items = Array.isArray(parsed.data) ? parsed.data
+    : (parsed && parsed.data && Array.isArray(parsed.data.items)) ? parsed.data.items
+    : [];
+
+  return items.map(function (leader) {
+    var fullName = ((leader.first_name || '') + ' ' + (leader.last_name || '')).trim().replace(/\s+/g, ' ');
+    var isActive = (typeof leader.is_active === 'boolean')
+      ? leader.is_active
+      : (leader.status ? String(leader.status).toLowerCase() === 'active'
+        : (typeof leader.active === 'boolean' ? leader.active : false));
+    return [leader.id, fullName, isActive ? 'active' : 'inactive'];
+  });
+}
+
+function fetchRunningLeadersByTeam(token) {
+  var baseUrl = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_URL'))
+    || 'https://api.studentsrunphilly.org/api/v2';
+  var resolvedToken = token
+    || (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_TOKEN'))
+    || '';
+
+  if (!resolvedToken) {
+    throw new Error('set COURSEMAP_API_TOKEN in script properties or pass token to fetchRunningLeadersByTeam(token)');
+  }
+
+  var headers = {
+    'Authorization': 'Bearer ' + resolvedToken,
+    'Accept': 'application/json'
+  };
+
+  var teamsUrl = baseUrl + '/teams/all';
+  var teamsResp = UrlFetchApp.fetch(teamsUrl, { method: 'get', headers: headers, muteHttpExceptions: true });
+  var teamsStatus = teamsResp.getResponseCode();
+  var teamsBody = teamsResp.getContentText();
+  if (teamsStatus < 200 || teamsStatus >= 300) {
+    throw new Error('coursemap teams/all failed: ' + teamsStatus + ' ' + teamsBody);
+  }
+  var teamsParsed = JSON.parse(teamsBody || '{}');
+  var teams = Array.isArray(teamsParsed.data) ? teamsParsed.data : [];
+
+  var rows = [];
+  teams.forEach(function (team) {
+    var teamId = team && (team.id || team.team_id);
+    if (!teamId) {
+      return;
+    }
+    var teamName = (team.name || team.team_name || team.title || '').toString();
+    var detailUrl = baseUrl + '/teams/get-details/' + encodeURIComponent(teamId);
+    var detailResp = UrlFetchApp.fetch(detailUrl, { method: 'get', headers: headers, muteHttpExceptions: true });
+    var detailStatus = detailResp.getResponseCode();
+    if (detailStatus < 200 || detailStatus >= 300) {
+      return;
+    }
+    var detailBody = detailResp.getContentText();
+    var detail = JSON.parse(detailBody || '{}');
+    var data = detail && detail.data ? detail.data : detail; 
+
+    var leaderCandidates = [];
+    if (data && Array.isArray(data.leaders)) {
+      leaderCandidates = data.leaders;
+    } else if (data && Array.isArray(data.team_leaders)) {
+      leaderCandidates = data.team_leaders;
+    } else if (data && Array.isArray(data.users)) {
+      leaderCandidates = data.users.filter(function (u) {
+        var role = (u.role && (u.role.name || u.role)) || u.role_name || u.roleKey || u.role_key || '';
+        var roleStr = String(role || '').toLowerCase();
+        return roleStr === 'leader' || roleStr === 'team_leader' || roleStr === 'coach';
+      });
+    } else if (data && Array.isArray(data.members)) {
+      leaderCandidates = data.members.filter(function (m) {
+        var role = (m.role && (m.role.name || m.role)) || m.role_name || m.roleKey || m.role_key || '';
+        return String(role || '').toLowerCase() === 'leader';
+      });
+    }
+
+    leaderCandidates.forEach(function (leader) {
+      var leaderId = leader.id || leader.user_id;
+      if (!leaderId) {
+        return;
+      }
+      var fullName = ((leader.first_name || '') + ' ' + (leader.last_name || '')).trim().replace(/\s+/g, ' ');
+      if (!fullName && leader.name) {
+        fullName = String(leader.name).trim();
+      }
+      var isActive = (typeof leader.is_active === 'boolean')
+        ? leader.is_active
+        : (leader.status ? String(leader.status).toLowerCase() === 'active'
+          : (typeof leader.active === 'boolean' ? leader.active : false));
+      rows.push([teamId, teamName, leaderId, fullName, isActive ? 'active' : 'inactive']);
+    });
+  });
+
+  return rows;
+}
