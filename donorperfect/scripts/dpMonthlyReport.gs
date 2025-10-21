@@ -849,6 +849,60 @@ function saveDonor(donor, config) {
   return 0;
 }
 
+// add full dp_savegift helper mirroring documented parameters
+function saveGift(gift, config) {
+  // defaults and normalization
+  function strOrNull(v) { return v == null || v === '' ? null : String(v); }
+  function numOrZero(v) { var n = Number(v || 0); return isNaN(n) ? 0 : n; }
+  function ynOr(val, fallback) {
+    var s = String(val == null ? '' : val).toUpperCase();
+    if (s === 'Y' || s === 'N') return s;
+    return fallback;
+  }
+  var params = {
+    '@gift_id': numOrZero(gift && gift.gift_id),
+    '@donor_id': numOrZero(gift && gift.donor_id),
+    '@record_type': strOrNull(gift && gift.record_type) || 'G',
+    '@gift_date': gift && gift.gift_date instanceof Date ? ('\'' + formatDateForSql(gift.gift_date) + '\'') : (gift && gift.gift_date ? ('\'' + formatDateForSql(new Date(gift.gift_date)) + '\'') : '\'" + formatDateForSql(new Date()) + "\''),
+    '@amount': Number(gift && gift.amount || 0),
+    '@gl_code': strOrNull(gift && gift.gl_code) || 'GEN',
+    '@solicit_code': strOrNull(gift && gift.solicit_code),
+    '@sub_solicit_code': strOrNull(gift && gift.sub_solicit_code),
+    '@campaign': strOrNull(gift && gift.campaign),
+    '@gift_type': strOrNull(gift && gift.gift_type) || 'CASH',
+    '@split_gift': ynOr(gift && gift.split_gift, 'N'),
+    '@pledge_payment': ynOr(gift && gift.pledge_payment, 'N'),
+    '@reference': strOrNull(gift && gift.reference),
+    '@transaction_id': gift && gift.transaction_id ? String(gift.transaction_id) : null,
+    '@memory_honor': strOrNull(gift && gift.memory_honor),
+    '@gfname': strOrNull(gift && gift.gfname),
+    '@glname': strOrNull(gift && gift.glname),
+    '@fmv': Number(gift && gift.fmv || 0),
+    '@batch_no': Number(gift && gift.batch_no || 0),
+    '@gift_narrative': strOrNull(gift && gift.gift_narrative),
+    '@ty_letter_no': strOrNull(gift && gift.ty_letter_no) || 'TY',
+    '@glink': gift && gift.glink ? Number(gift.glink) : null,
+    '@plink': gift && gift.plink ? Number(gift.plink) : null,
+    '@nocalc': ynOr(gift && gift.nocalc, 'N'),
+    '@receipt': ynOr(gift && gift.receipt, 'N'),
+    '@old_amount': gift && gift.old_amount != null ? Number(gift.old_amount) : null,
+    '@user_id': (config && config.apiUserId) ? config.apiUserId : 'srps-monthly-report',
+    '@membership_type': strOrNull(gift && gift.membership_type),
+    '@membership_level': strOrNull(gift && gift.membership_level),
+    '@membership_enr_date': gift && gift.membership_enr_date instanceof Date ? ('\'' + formatDateForSql(gift.membership_enr_date) + '\'') : (gift && gift.membership_enr_date ? ('\'' + formatDateForSql(new Date(gift.membership_enr_date)) + '\'') : null),
+    '@membership_exp_date': gift && gift.membership_exp_date instanceof Date ? ('\'' + formatDateForSql(gift.membership_exp_date) + '\'') : (gift && gift.membership_exp_date ? ('\'' + formatDateForSql(new Date(gift.membership_exp_date)) + '\'') : null),
+    '@membership_link_ID': gift && gift.membership_link_ID ? Number(gift.membership_link_ID) : null,
+    '@address_id': gift && gift.address_id ? Number(gift.address_id) : null
+  };
+
+  // enforce gift_id default 0 for creation
+  if (!params['@gift_id']) params['@gift_id'] = 0;
+  // construct call
+  var xml = callDonorPerfectRaw({ action: 'dp_savegift', params: params }, config);
+  var giftId = extractFirstResultValue(xml);
+  return giftId ? Number(giftId) : 0;
+}
+
 function buildParamsValue(params) {
   if (!params) {
     return '';
