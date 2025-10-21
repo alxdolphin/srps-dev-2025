@@ -1149,3 +1149,269 @@ function fetchRunningLeadersByTeam(token) {
 
   return rows;
 }
+
+// --- Leader → Team mapping and exports ---
+
+function resolveCoursemapConfig() {
+  var baseUrl = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_URL'))
+    || 'https://api.studentsrunphilly.org/api/v2';
+  var token = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_TOKEN'))
+    || '';
+  if (!token) {
+    throw new Error('set COURSEMAP_API_TOKEN in script properties');
+  }
+  return {
+    baseUrl: baseUrl,
+    token: token,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/json'
+    }
+  };
+}
+
+function deriveActiveLabel(entity) {
+  function asBool(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    var s = String(v || '').toLowerCase();
+    return s === 'true' || s === '1' || s === 'active' || s === 'y' || s === 'yes';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'is_active')) {
+    return asBool(entity.is_active) ? 'active' : 'inactive';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'status')) {
+    return String(entity.status).toLowerCase() === 'active' ? 'active' : 'inactive';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'active')) {
+    return asBool(entity.active) ? 'active' : 'inactive';
+  }
+  return 'inactive';
+}
+
+function extractUsersArray(parsed) {
+  if (!parsed) return [];
+  if (parsed.data && Array.isArray(parsed.data.users)) return parsed.data.users;
+  if (Array.isArray(parsed.users)) return parsed.users;
+  if (parsed.data && Array.isArray(parsed.data.data)) return parsed.data.data;
+  if (Array.isArray(parsed.data)) return parsed.data;
+  return [];
+}
+
+function fetchActiveLeadersNormalized() {
+  var cfg = resolveCoursemapConfig();
+  var url = cfg.baseUrl + '/users/get-leaders?page=all&active=true';
+  var resp = UrlFetchApp.fetch(url, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+  var status = resp.getResponseCode();
+  var body = resp.getContentText();
+  if (status < 200 || status >= 300) {
+    throw new Error('coursemap get-leaders active failed: ' + status + ' ' + body);
+  }
+  var parsed = JSON.parse(body || '{}');
+  var users = extractUsersArray(parsed);
+  return users.map(function (u) {
+    var id = u.id || u.user_id;
+    var first = u.first_name || '';
+    var last = u.last_name || '';
+    var email = u.email || '';
+    var statusLabel = deriveActiveLabel(u);
+    return {
+      id: id,
+      first_name: first,
+      last_name: last,
+      name: (first + ' ' + last).trim().replace(/\s+/g, ' '),
+      email: email,
+      status: statusLabel
+    };
+  }).filter(function (u) { return u.status === 'active'; });
+}
+
+function readRoleName(entity) {
+  if (!entity) return '';
+  var role = (entity.role && (entity.role.name || entity.role)) || entity.role_name || entity.roleKey || entity.role_key || entity.role;
+  return String(role || '').trim();
+}
+
+function fetchAllTeamsDetailsNormalized() {
+  var cfg = resolveCoursemapConfig();
+  var teamsUrl = cfg.baseUrl + '/teams/all';
+  var teamsResp = UrlFetchApp.fetch(teamsUrl, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+  var teamsStatus = teamsResp.getResponseCode();
+  var teamsBody = teamsResp.getContentText();
+  if (teamsStatus < 200 || teamsStatus >= 300) {
+    throw new Error('coursemap teams/all failed: ' + teamsStatus + ' ' + teamsBody);
+  }
+  var teamsParsed = JSON.parse(teamsBody || '{}');
+  var rawTeams = [];
+  if (teamsParsed && Array.isArray(teamsParsed.data)) rawTeams = teamsParsed.data;
+  else if (Array.isArray(teamsParsed.teams)) rawTeams = teamsParsed.teams;
+  else if (teamsParsed && teamsParsed.data && Array.isArray(teamsParsed.data.items)) rawTeams = teamsParsed.data.items;
+
+  var teams = [];
+  rawTeams.forEach(function (team) {
+    var teamId = team && (team.id || team.team_id);
+    if (!teamId) return;
+    var teamName = (team.name || team.team_name || team.title || '').toString();
+    var detailUrl = cfg.baseUrl + '/teams/get-details/' + encodeURIComponent(teamId);
+    var detailResp = UrlFetchApp.fetch(detailUrl, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+    if (detailResp.getResponseCode() < 200 || detailResp.getResponseCode() >= 300) {
+      return;
+    }
+    var detailBody = detailResp.getContentText();
+    var detail = JSON.parse(detailBody || '{}');
+    var data = detail && detail.data ? detail.data : detail;
+
+    var leaderCandidates = [];
+    if (data && Array.isArray(data.leaders)) {
+      leaderCandidates = data.leaders;
+    } else if (data && Array.isArray(data.team_leaders)) {
+      leaderCandidates = data.team_leaders;
+    } else if (data && Array.isArray(data.users)) {
+      leaderCandidates = data.users.filter(function (u) {
+        var roleStr = readRoleName(u).toLowerCase();
+        return roleStr === 'leader' || roleStr === 'team_leader' || roleStr === 'coach';
+      });
+    } else if (data && Array.isArray(data.members)) {
+      leaderCandidates = data.members.filter(function (m) {
+        return readRoleName(m).toLowerCase() === 'leader';
+      });
+    }
+
+    var allMembers = [];
+    if (data && Array.isArray(data.members)) {
+      allMembers = data.members.slice();
+    } else if (data && Array.isArray(data.users)) {
+      allMembers = data.users.filter(function (u) {
+        var roleStr = readRoleName(u).toLowerCase();
+        return !(roleStr === 'leader' || roleStr === 'team_leader' || roleStr === 'coach');
+      });
+    }
+
+    var normLeaders = leaderCandidates.map(function (leader) {
+      var lid = leader.id || leader.user_id;
+      var first = leader.first_name || '';
+      var last = leader.last_name || '';
+      var nm = (first + ' ' + last).trim().replace(/\s+/g, ' ');
+      if (!nm && leader.name) nm = String(leader.name).trim();
+      return {
+        id: lid,
+        name: nm,
+        email: leader.email || '',
+        status: deriveActiveLabel(leader)
+      };
+    });
+
+    var normMembers = allMembers.map(function (m) {
+      var mid = m.id || m.user_id;
+      var first = m.first_name || '';
+      var last = m.last_name || '';
+      var nm = (first + ' ' + last).trim().replace(/\s+/g, ' ');
+      if (!nm && m.name) nm = String(m.name).trim();
+      return {
+        id: mid,
+        name: nm,
+        email: m.email || '',
+        role: readRoleName(m),
+        status: deriveActiveLabel(m)
+      };
+    });
+
+    teams.push({
+      id: teamId,
+      name: teamName,
+      leaders: normLeaders,
+      members: normMembers
+    });
+  });
+
+  return teams;
+}
+
+function buildLeaderTeamMapping() {
+  var activeLeaders = fetchActiveLeadersNormalized();
+  var leaderById = {};
+  activeLeaders.forEach(function (l) { if (l && l.id) leaderById[String(l.id)] = l; });
+  var teams = fetchAllTeamsDetailsNormalized();
+
+  var leaderIdToTeams = {};
+  teams.forEach(function (team) {
+    team.leaders.forEach(function (ldr) {
+      if (!ldr || !ldr.id) return;
+      var key = String(ldr.id);
+      if (!leaderById[key]) return;
+      if (ldr.status !== 'active') return;
+      if (!leaderIdToTeams[key]) leaderIdToTeams[key] = [];
+      leaderIdToTeams[key].push({
+        id: team.id,
+        name: team.name,
+        members: team.members
+      });
+    });
+  });
+
+  var mapping = Object.keys(leaderById).map(function (id) {
+    var l = leaderById[id];
+    return {
+      leader: { id: l.id, name: l.name, email: l.email, status: l.status },
+      teams: (leaderIdToTeams[id] || [])
+    };
+  });
+  return mapping;
+}
+
+function exportLeaderTeamMappingToDriveJSON() {
+  var data = buildLeaderTeamMapping();
+  var json = JSON.stringify(data, null, 2);
+  var blob = Utilities.newBlob(json, 'application/json', 'leaders_teams_tree.json');
+  var file = DriveApp.createFile(blob);
+  Logger.log('JSON file created: ' + file.getUrl());
+  return file.getUrl();
+}
+
+function exportLeaderTeamMappingToDriveCSV() {
+  var data = buildLeaderTeamMapping();
+  var rows = [];
+  rows.push(['leader_id','leader_name','leader_email','team_id','team_name','member_id','member_name','member_email','member_role','member_status']);
+  data.forEach(function (entry) {
+    var leader = entry.leader || {};
+    var leaderId = leader.id || '';
+    var leaderName = leader.name || '';
+    var leaderEmail = leader.email || '';
+    (entry.teams || []).forEach(function (team) {
+      var teamId = team.id || '';
+      var teamName = team.name || '';
+      (team.members || []).forEach(function (m) {
+        rows.push([
+          leaderId,
+          leaderName,
+          leaderEmail,
+          teamId,
+          teamName,
+          m.id || '',
+          m.name || '',
+          m.email || '',
+          m.role || '',
+          m.status || ''
+        ]);
+      });
+      if (!(team.members && team.members.length)) {
+        rows.push([leaderId, leaderName, leaderEmail, teamId, teamName, '', '', '', '', '']);
+      }
+    });
+    if (!(entry.teams && entry.teams.length)) {
+      rows.push([leaderId, leaderName, leaderEmail, '', '', '', '', '', '', '']);
+    }
+  });
+  function csvEscape(val) {
+    var s = String(val == null ? '' : val);
+    if (/[",\n]/.test(s)) {
+      s = '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\n');
+  var blob = Utilities.newBlob(csv, 'text/csv', 'leaders_teams_ledger.csv');
+  var file = DriveApp.createFile(blob);
+  Logger.log('CSV file created: ' + file.getUrl());
+  return file.getUrl();
+}
