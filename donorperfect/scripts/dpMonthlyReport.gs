@@ -175,6 +175,10 @@ function runDpMonthlyReport(options) {
 }
 
 function fetchMonthlyData(range, config) {
+  // when fallback is enabled, avoid dynamic SELECT calls entirely
+  if (config && config.fallbackProceduresEnabled) {
+    return fetchMonthlyDataViaProcedures(range, config);
+  }
   var gifts = fetchMonthlyGifts(range, config);
   if (gifts.length) {
     return { gifts: gifts, donorLookup: null };
@@ -255,6 +259,10 @@ function fetchMonthlyDataViaProcedures(range, config) {
 }
 
 function fetchAllDonors(config) {
+  // honor fallback: use predefined procedures only
+  if (config && config.fallbackProceduresEnabled) {
+    return fetchAllDonorsViaProcedure(config);
+  }
   var donors = [];
   var seen = {};
   var lastDonorId = 0;
