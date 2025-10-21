@@ -57,12 +57,59 @@ function fetchMonthlyDataViaProcedures(range, config) {
 // set dp_api_url and dp_api_key in script properties
 const scriptProperties = PropertiesService.getScriptProperties();
 
+// Debug logging helpers (enabled via DP_DEBUG script property: '1' to enable, '0' to disable)
+function isDebugEnabled(config) {
+  var flag;
+  if (config && typeof config.debugEnabled === 'boolean') {
+    flag = config.debugEnabled;
+  } else {
+    var prop = String(scriptProperties.getProperty('DP_DEBUG') || '0').trim();
+    flag = (prop === '1');
+  }
+  return flag === true;
+}
+
+function logDebug(config, message, data) {
+  if (!isDebugEnabled(config)) {
+    return;
+  }
+  try {
+    var payload = message;
+    if (data !== undefined) {
+      var text;
+      try {
+        text = JSON.stringify(data);
+      } catch (e) {
+        text = String(data);
+      }
+      payload += ' ' + text;
+    }
+    Logger.log(payload);
+  } catch (err) {
+    // swallow logging errors
+  }
+}
+
+// Encode query component using application/x-www-form-urlencoded style (spaces as '+')
+function encodeFormComponent(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return encodeURIComponent(String(value)).replace(/%20/g, '+');
+}
+
 function getConfig() {
   const recurring = scriptProperties.getProperty('DP_RECURRING_GIFT_TYPES');
   const recordTypes = scriptProperties.getProperty('DP_INCLUDED_RECORD_TYPES');
+  // Support DP_DEBUG strictly as '1' (enabled) or '0' (disabled)
+  var debugRaw = String(scriptProperties.getProperty('DP_DEBUG') || '0').trim();
+  var debugEnabled = (debugRaw === '1');
+  // DO NOT decode the API key, just use as-is
+  var rawApiKey = scriptProperties.getProperty('DP_API_KEY') || '';
+  // Just use the raw API key without decoding
   const config = {
     apiUrl: scriptProperties.getProperty('DP_API_URL') || '',
-    apiKey: scriptProperties.getProperty('DP_API_KEY') || '',
+    apiKey: rawApiKey,
     apiUsername: scriptProperties.getProperty('DP_API_USERNAME') || '',
     apiPassword: scriptProperties.getProperty('DP_API_PASSWORD') || '',
     reportSpreadsheetId: scriptProperties.getProperty('DP_REPORT_SPREADSHEET_ID') || '',
@@ -75,7 +122,8 @@ function getConfig() {
     includedRecordTypes: recordTypes
       ? recordTypes.split(',').map(function (item) { return item.trim().toUpperCase(); }).filter(function (item) { return item; })
       : ['G', 'M'],
-    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'false').toLowerCase() === 'true'
+    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'false').toLowerCase() === 'true',
+    debugEnabled: debugEnabled
   };
   if (!config.apiUrl) {
     throw new Error('set DP_API_URL in script properties');
@@ -83,6 +131,16 @@ function getConfig() {
   if (!config.apiKey && !(config.apiUsername && config.apiPassword)) {
     throw new Error('set DP_API_KEY or DP_API_USERNAME and DP_API_PASSWORD in script properties');
   }
+  logDebug(config, 'getConfig resolved', {
+    apiUrl: config.apiUrl,
+    apiKeyPreview: config.apiKey ? config.apiKey.slice(0, 6) : '',
+    apiKeyWasDecoded: false,
+    reportSheetName: config.reportSheetName,
+    detailSheetName: config.detailSheetName,
+    leaderField: config.leaderField,
+    fallbackProceduresEnabled: config.fallbackProceduresEnabled,
+    debugEnabled: config.debugEnabled
+  });
   return config;
 }
 
@@ -90,15 +148,26 @@ function runDpMonthlyReport(options) {
   var config = getConfig();
   var targetDate = resolveTargetDate(options);
   var range = buildMonthRange(targetDate);
+  logDebug(config, 'runDpMonthlyReport start', {
+    targetDateIso: targetDate.toISOString(),
+    startSql: range.startSql,
+    endSql: range.endSql
+  });
   var monthlyData = fetchMonthlyData(range, config);
   var gifts = monthlyData.gifts;
   var donorLookup = monthlyData.donorLookup;
+  logDebug(config, 'monthly data fetched', {
+    giftCount: gifts.length,
+    donorLookupProvided: !!donorLookup
+  });
   var donorIds = uniqueValues(gifts.map(function (gift) { return gift.donor_id; })).filter(function (id) { return id; });
   if (!donorLookup) {
     donorLookup = fetchDonorsByIds(donorIds, config);
+    logDebug(config, 'donor lookup resolved', { requested: donorIds.length, resolved: Object.keys(donorLookup).length });
   }
   var metrics = computeMetrics(range, gifts, donorLookup, config);
   writeMetrics(range, metrics, gifts, donorLookup, config);
+  logDebug(config, 'runDpMonthlyReport completed', metrics);
   console.log('dp monthly report', metrics);
   return metrics;
 }
@@ -107,6 +176,13 @@ function fetchMonthlyData(range, config) {
   var gifts = fetchMonthlyGifts(range, config);
   if (gifts.length) {
     return { gifts: gifts, donorLookup: null };
+  }
+  if (!config.fallbackProceduresEnabled) {
+    logDebug(config, 'fetchMonthlyData no gifts for range; procedure fallback disabled', {
+      startSql: range.startSql,
+      endSql: range.endSql
+    });
+    return { gifts: [], donorLookup: {} };
   }
   return fetchMonthlyDataViaProcedures(range, config);
 }
@@ -118,7 +194,7 @@ function fetchMonthlyDataViaProcedures(range, config) {
   }
   var donorLookup = {};
   var gifts = [];
-  donors.forEach(function (donor) {
+  donors.forEach(function (donor, idx) {
     var donorId = donor.donor_id;
     if (!donorId) {
       return;
@@ -169,6 +245,9 @@ function fetchMonthlyDataViaProcedures(range, config) {
       donorInfo.first_gift = formatDateForSql(earliestGiftDate);
     }
     donorLookup[donorId] = donorInfo;
+    if ((idx + 1) % 50 === 0) {
+      logDebug(config, 'fetchMonthlyDataViaProcedures progress', { processedDonors: idx + 1, giftsSoFar: gifts.length });
+    }
   });
   return { gifts: gifts, donorLookup: donorLookup };
 }
@@ -177,6 +256,8 @@ function fetchAllDonors(config) {
   var donors = [];
   var seen = {};
   var lastDonorId = 0;
+  var batches = 0;
+  var total = 0;
   while (true) {
     var selectColumns = 'donor_id, donor_type, org_rec, first_gift';
     if (config.leaderField) {
@@ -187,6 +268,7 @@ function fetchAllDonors(config) {
     if (!batch.length) {
       break;
     }
+    batches += 1;
     batch.forEach(function (record) {
       var donorId = record.donor_id;
       if (!donorId || seen[donorId]) {
@@ -203,13 +285,18 @@ function fetchAllDonors(config) {
         donor[config.leaderField] = record[config.leaderField];
       }
       donors.push(donor);
+      total += 1;
     });
     var lastRecord = batch[batch.length - 1];
     lastDonorId = Math.max(lastDonorId, Number(lastRecord.donor_id || lastDonorId));
+    if (batches % 5 === 0) {
+      logDebug(config, 'fetchAllDonors progress', { batches: batches, lastDonorId: lastDonorId, total: total });
+    }
     if (batch.length < 500) {
       break;
     }
   }
+  logDebug(config, 'fetchAllDonors complete', { batches: batches, total: total });
   if (donors.length) {
     return donors;
   }
@@ -227,7 +314,7 @@ function fetchAllDonorsViaProcedure(config) {
     prefixes.push(String.fromCharCode(letter) + '%');
   }
   prefixes.push(null);
-  prefixes.forEach(function (prefix) {
+  prefixes.forEach(function (prefix, idx) {
     var params = buildDonorSearchParams(prefix);
     var batch = callDonorPerfectProcedure('dp_donorsearch', params, config);
     batch.forEach(function (record) {
@@ -247,7 +334,11 @@ function fetchAllDonorsViaProcedure(config) {
       }
       donors.push(donor);
     });
+    if ((idx + 1) % 5 === 0) {
+      logDebug(config, 'fetchAllDonorsViaProcedure progress', { prefixesProcessed: idx + 1, donors: donors.length });
+    }
   });
+  logDebug(config, 'fetchAllDonorsViaProcedure complete', { donors: donors.length });
   return donors;
 }
 
@@ -296,8 +387,10 @@ function fetchMonthlyGifts(range, config) {
   if (!range || !range.start || !range.startSql || !range.end || !range.endSql) {
     throw new Error('fetchMonthlyGifts expected a range object from buildMonthRange');
   }
+  logDebug(config, 'fetchMonthlyGifts begin', { startSql: range.startSql, endSql: range.endSql });
   var gifts = [];
   var lastGiftId = 0;
+  var batches = 0;
   while (true) {
     var sql = 'SELECT TOP 500 gift_id, donor_id, amount, gift_date, gift_type, record_type, split_gift, pledge_payment, reference, solicit_code, first_name, last_name '
       + 'FROM dpgift '
@@ -309,6 +402,7 @@ function fetchMonthlyGifts(range, config) {
     if (!batch.length) {
       break;
     }
+    batches += 1;
     batch.forEach(function (record) {
       var giftId = Number(record.gift_id || 0);
       if (giftId > lastGiftId) {
@@ -328,10 +422,14 @@ function fetchMonthlyGifts(range, config) {
         last_name: record.last_name || ''
       });
     });
+    if (batches % 5 === 0) {
+      logDebug(config, 'fetchMonthlyGifts progress', { batches: batches, lastGiftId: lastGiftId, gifts: gifts.length });
+    }
     if (batch.length < 500) {
       break;
     }
   }
+  logDebug(config, 'fetchMonthlyGifts complete', { count: gifts.length });
   return gifts;
 }
 
@@ -351,6 +449,7 @@ function fetchDonorsByIds(ids, config) {
       lookup[record.donor_id] = record;
     });
   });
+  logDebug(config, 'fetchDonorsByIds', { requested: ids.length, resolved: Object.keys(lookup).length });
   return lookup;
 }
 
@@ -404,6 +503,15 @@ function computeMetrics(range, gifts, donorLookup, config) {
       }
     }
   });
+  logDebug(config, 'computeMetrics summary', {
+    donorCount: donorIds.length,
+    giftCount: giftCount,
+    donationTotal: Number(donationTotal.toFixed(2)),
+    recurringDonorCount: recurringDonorIds.size,
+    newDonorCount: newDonorIds.size,
+    runningLeaderCount: runningLeaderIds.size,
+    matchedCompanyCount: matchedCompanyIds.size
+  });
   return {
     donorCount: donorIds.length,
     donationTotal: Number(donationTotal.toFixed(2)),
@@ -439,10 +547,16 @@ function writeMetrics(range, metrics, gifts, donorLookup, config) {
   if (!spreadsheet) {
     throw new Error('unable to resolve spreadsheet destination');
   }
+  logDebug(config, 'writeMetrics begin', { spreadsheetId: config.reportSpreadsheetId || 'active' });
   var summarySheet = resolveSummarySheet(spreadsheet, config);
   writeSummaryRow(summarySheet, range, metrics);
   var detailSheet = resolveDetailSheet(spreadsheet, config);
   writeDetailRows(detailSheet, range, gifts, donorLookup, config);
+  logDebug(config, 'writeMetrics done', {
+    summarySheet: summarySheet.getName(),
+    detailSheet: detailSheet.getName(),
+    giftsWritten: gifts.length
+  });
 }
 
 function resolveSummarySheet(spreadsheet, config) {
@@ -496,6 +610,7 @@ function writeDetailRows(sheet, range, gifts, donorLookup, config) {
   if (!gifts.length) {
     sheet.clearContents();
     sheet.getRange(1, 1, keepRows.length + 1, headerLength).setValues([header].concat(keepRows));
+    logDebug(config, 'writeDetailRows cleared month rows', { month: monthLabel, keptRows: keepRows.length });
     return;
   }
 
@@ -536,6 +651,7 @@ function writeDetailRows(sheet, range, gifts, donorLookup, config) {
   var combined = [header].concat(keepRows, rows);
   sheet.clearContents();
   sheet.getRange(1, 1, combined.length, headerLength).setValues(combined);
+  logDebug(config, 'writeDetailRows wrote rows', { month: monthLabel, existingKept: keepRows.length, newRows: rows.length, totalRows: combined.length - 1 });
 }
 
 function scheduleMonthlyTrigger(dayOfMonth, hour) {
@@ -567,22 +683,33 @@ function callDonorPerfect(request, config) {
   } else {
     throw new Error('unsupported request type passed to callDonorPerfect');
   }
+  // Use API key as-is, do not decode
   var apiKey = config.apiKey;
-  if (/%[0-9A-Fa-f]{2}/.test(apiKey)) {
-    try {
-      apiKey = decodeURIComponent(apiKey);
-    } catch (err) {
-      // keep original if decoding fails
-    }
+  // Rebuild URL with form-style encoding for better compatibility with DP API
+  var encodedAction = encodeFormComponent(action);
+  var encodedParamsSegment = '';
+  if (paramsSegment) {
+    var rawParams = paramsSegment.replace(/^&params=/, '');
+    encodedParamsSegment = '&params=' + encodeFormComponent(decodeURIComponent(rawParams));
   }
-  var url = config.apiUrl + '?apikey=' + encodeURIComponent(apiKey) + '&action=' + encodeURIComponent(action) + paramsSegment;
-  var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  logDebug(config, 'DP request', { action: action, hasParams: !!paramsSegment, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
+  var response = UrlFetchApp.fetch(urlFormEncoded, {
+    muteHttpExceptions: true,
+    headers: {
+      'User-Agent': 'srps-dpTagRunLeads/2025.10',
+      'Accept': 'application/xml, text/xml, */*',
+      'Connection': 'close'
+    }
+  });
   var status = response.getResponseCode();
   var body = response.getContentText();
+  logDebug(config, 'DP response', { action: action, status: status, bodyLength: body ? body.length : 0 });
   if (status !== 200) {
     throw new Error('donorperfect request failed: ' + status + ' ' + body);
   }
   var records = parseRecords(body);
+  logDebug(config, 'DP parsed records', { action: action, count: records.length });
   return records;
 }
 

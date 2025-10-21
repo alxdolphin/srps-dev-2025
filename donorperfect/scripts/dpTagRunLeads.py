@@ -32,7 +32,6 @@ _DEFAULT_TIMEOUT_SEC = 15.0
 _DEFAULT_MAX_RETRIES = 3
 _USER_AGENT = 'srps-dpTagRunLeads/2025.10'
 
-# minimal xml helpers for dp result parsing
 def _extract_between(text: str, start_token: str, end_token: str) -> Optional[str]:
     start = text.find(start_token)
     if start == -1:
@@ -43,11 +42,9 @@ def _extract_between(text: str, start_token: str, end_token: str) -> Optional[st
         return None
     return text[start:end]
 
-
 def parse_result_records(xml_text: str) -> List[Dict[str, str]]:
     if not xml_text or '<result' not in xml_text:
         return []
-    # split into <record>...</record>
     records: List[Dict[str, str]] = []
     cursor = 0
     while True:
@@ -60,7 +57,6 @@ def parse_result_records(xml_text: str) -> List[Dict[str, str]]:
         rec_xml = xml_text[rec_start:rec_end]
         cursor = rec_end + len('</record>')
         record: Dict[str, str] = {}
-        # fields like <field name='donor_id' value='123' /> or <field name='x'>text</field>
         field_cursor = 0
         while True:
             field_start = rec_xml.find('<field', field_cursor)
@@ -72,11 +68,9 @@ def parse_result_records(xml_text: str) -> List[Dict[str, str]]:
             field_tag = rec_xml[field_start:tag_close + 1]
             name = _extract_between(field_tag, "name='", "'")
             value_attr = _extract_between(field_tag, "value='", "'")
-            # self-closing?
             is_self_closing = field_tag.endswith('/>')
             value_text = ''
             if not is_self_closing:
-                # find closing
                 close_tag = rec_xml.find('</field>', tag_close)
                 if close_tag != -1:
                     value_text = rec_xml[tag_close + 1:close_tag]
@@ -90,7 +84,6 @@ def parse_result_records(xml_text: str) -> List[Dict[str, str]]:
         records.append(record)
     return records
 
-
 def dp_call(api_url: str, api_key: str, action: str, params: Optional[str] = None) -> Tuple[int, str]:
     query = {
         'apikey': api_key,
@@ -101,7 +94,6 @@ def dp_call(api_url: str, api_key: str, action: str, params: Optional[str] = Non
     url = api_url + '?' + urllib.parse.urlencode(query)
     debug(f"API call: {action}, params: {params}")
 
-    # resolve runtime-configured retry/timeout
     try:
         max_retries = int(os.environ.get('DP_HTTP_RETRIES', str(_DEFAULT_MAX_RETRIES)))
     except ValueError:
@@ -131,7 +123,6 @@ def dp_call(api_url: str, api_key: str, action: str, params: Optional[str] = Non
             status = getattr(e, 'code', 0) or 0
             body_bytes = getattr(e, 'fp', None).read() if getattr(e, 'fp', None) else None
             body_text = (body_bytes.decode('utf-8', errors='replace') if body_bytes else '')
-            # retry on transient errors
             if status in (429, 500, 502, 503, 504) and attempt < max_retries:
                 retry_after = 0.0
                 try:
@@ -143,13 +134,11 @@ def dp_call(api_url: str, api_key: str, action: str, params: Optional[str] = Non
                 continue
             return status, body_text
         except urllib.error.URLError as e:
-            # timeout/connection issue
             if attempt < max_retries:
                 time.sleep(min(0.5 * (2 ** (attempt - 1)), 8.0))
                 continue
             reason = getattr(e, 'reason', '')
             return 0, str(reason) if reason else str(e)
-
 
 def named_params(**pairs) -> str:
     segments = []
@@ -161,22 +150,17 @@ def named_params(**pairs) -> str:
         elif isinstance(value, (int, float)):
             segments.append(f"@{key}={value}")
         else:
-            # quote and escape single quotes per DP doc
             s = str(value).replace("'", "''")
             segments.append(f"@{key}='{s}'")
     return ','.join(segments)
 
-
 def ensure_dirs(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
 
-
 def escape_sql(value: str) -> str:
-    """escape single quotes for safe literal insertion in DP sql strings"""
     return str(value).replace("'", "''")
 
 def flag_code_exists(api_url: str, api_key: str, flag_code: str) -> bool:
-    """check if a FLAG code exists and is active (not inactive) in dpcodes."""
     safe = escape_sql(flag_code)
     sql = f"SELECT TOP 1 code, inactive FROM dpcodes WHERE field_name='FLAG' AND code='{safe}'"
     status, body = dp_call(api_url, api_key, sql)
@@ -190,7 +174,6 @@ def flag_code_exists(api_url: str, api_key: str, flag_code: str) -> bool:
             return inactive != 'Y'
     return False
 
-
 def donor_has_flag(api_url: str, api_key: str, donor_id: str, flag_code: str) -> bool:
     safe_flag = escape_sql(flag_code)
     sql = f"SELECT TOP 1 flag FROM dpflags WHERE donor_id={int(donor_id)} AND flag='{safe_flag}'"
@@ -200,9 +183,7 @@ def donor_has_flag(api_url: str, api_key: str, donor_id: str, flag_code: str) ->
     records = parse_result_records(body)
     return len(records) > 0
 
-
 def get_existing_flags(api_url: str, api_key: str, donor_id: str) -> List[str]:
-    """Retrieve all flag codes for the given donor_id from dpflags table."""
     sql = f"SELECT flag FROM dpflags WHERE donor_id={int(donor_id)}"
     status, body = dp_call(api_url, api_key, sql)
     if status != 200:
@@ -211,23 +192,19 @@ def get_existing_flags(api_url: str, api_key: str, donor_id: str) -> List[str]:
     return [rec.get("flag") for rec in records if "flag" in rec and rec.get("flag")]
 
 def set_flag_saveflag(api_url: str, api_key: str, donor_id: str, flag_code: str) -> Tuple[bool, str]:
-    """set a donor flag via dp_saveflag_xml; treat duplicate as already-set."""
     params = named_params(donor_id=int(donor_id), flag=flag_code, user_id='srps-script')
     status, body = dp_call(api_url, api_key, 'dp_saveflag_xml', params)
     if status != 200:
         return False, 'failed'
     if '<result' in body:
         return True, 'updated'
-    # check duplicate primary key error text
     lower_body = body.lower()
     if 'violation of primary key constraint' in lower_body or 'duplicate key' in lower_body:
         return True, 'already-set'
     return False, 'failed'
 
-
 def choose_flag(status: str, active_flag: str, former_flag: str) -> str:
     return active_flag if (status or '').strip().lower() == 'active' else former_flag
-
 
 def donor_has_any_gifts_cached(api_url: str, api_key: str, donor_id: str, gift_cache: Dict[str, bool]) -> bool:
     cached = gift_cache.get(donor_id)
@@ -237,14 +214,11 @@ def donor_has_any_gifts_cached(api_url: str, api_key: str, donor_id: str, gift_c
     gift_cache[donor_id] = has
     return has
 
-
 def log_ambiguous(am_writer: csv.writer, leader: 'Leader', leader_name: str, reason: str):
     am_writer.writerow([leader.coursemap_id, leader_name, leader.email, reason])
 
-
 def log_unmatched(um_writer: csv.writer, leader: 'Leader', leader_name: str, reason: str):
     um_writer.writerow([leader.coursemap_id, leader_name, leader.email, reason])
-
 
 def resolve_donor_id(api_url: str, api_key: str, leader: 'Leader', am_writer: csv.writer, um_writer: csv.writer) -> Tuple[Optional[str], Optional[str], bool, bool]:
     leader_name = (leader.first_name + ' ' + leader.last_name).strip()
@@ -271,7 +245,6 @@ def resolve_donor_id(api_url: str, api_key: str, leader: 'Leader', am_writer: cs
         return None, None, False, True
     return donor_id, 'name', False, False
 
-
 @dataclass
 class Leader:
     coursemap_id: str
@@ -280,7 +253,6 @@ class Leader:
     email: str
     status: str
 
-
 def load_leaders_csv(path: Path) -> List[Leader]:
     items: List[Leader] = []
     with path.open('r', encoding='utf-8') as f:
@@ -288,14 +260,11 @@ def load_leaders_csv(path: Path) -> List[Leader]:
         for row in reader:
             if not row:
                 continue
-            # expect: id,first_name,last_name,email (from updated pullRunLeads.sh)
             if row[0].lower() == 'id':
-                # allow header if present later
                 continue
             coursemap_id = (row[0] or '').strip()
             first_name = (row[1] or '').strip()
             last_name = (row[2] or '').strip()
-            # keep email as-is for exact match and build variants in query
             email = (row[3] or '').strip()
             status = (row[4] or '').strip().lower() if len(row) > 4 else ''
             if status not in ('active', 'inactive'):
@@ -304,12 +273,10 @@ def load_leaders_csv(path: Path) -> List[Leader]:
     logger.info(f"Loaded {len(items)} leader records from CSV {path}")
     return items
 
-
 def find_donor_by_email(api_url: str, api_key: str, email: str) -> Optional[Dict[str, str]]:
     if not email:
         logger.debug(f"Skipped empty email")
         return None
-    # dynamic query to dp table with case-insensitive equality via variants
     raw = email
     lower = raw.lower()
     upper = raw.upper()
@@ -335,13 +302,11 @@ def find_donor_by_email(api_url: str, api_key: str, email: str) -> Optional[Dict
 def _normalize_name(value: str) -> str:
     if not value:
         return ''
-    # lowercase, remove non-letters, collapse spaces
     s = value.strip().lower()
     s = re.sub(r"[^a-z]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 def find_donor_by_name(api_url: str, api_key: str, first_name: str, last_name: str, expected_email: Optional[str] = None) -> Optional[Dict[str, str]]:
-    # prefer dp_donorsearch with wildcards; fallback to exact match without functions
     if not first_name or not last_name:
         logger.debug(f"Skipped empty first or last name for donor lookup")
         return None
@@ -392,7 +357,6 @@ def find_donor_by_name(api_url: str, api_key: str, first_name: str, last_name: s
     else:
         logger.warning(f"dp_donorsearch failed for {first_name} {last_name}, status={status}")
 
-    # fallback: exact match on dp table without LOWER/UPPER
     safe_first = escape_sql(first_name)
     safe_last = escape_sql(last_name)
     sql = (
@@ -442,7 +406,6 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
     if not api_url or not api_key:
         print('error: DP_API_URL and DP_API_KEY must be set in environment', file=sys.stderr)
         return 2
-    # flags-only with sane defaults
     active_flag = os.environ.get('DP_ACTIVE_FLAG_CODE', 'RL') or 'RL'
     former_flag = os.environ.get('DP_FORMER_FLAG_CODE', 'FRL') or 'FRL'
     if not flag_code_exists(api_url, api_key, active_flag):
@@ -452,7 +415,6 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
         print(f"error: former flag code '{former_flag}' not found or is inactive in DonorPerfect Codes (FLAG)", file=sys.stderr)
         return 3
 
-    # compact start banner
     mode = 'APPLY' if apply else 'DRY-RUN'
     target = f"FLAG:{active_flag}/{former_flag}"
     print(f"{mode} – tagging leaders who donated → {target}")
@@ -478,7 +440,7 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
         processed = 0
         updated = 0
         matched_by_email = 0
-        matched_by_name = 0 # DP is litered with malformed records; sometimes name = email, etc.
+        matched_by_name = 0
         ambiguous_count = 0
         unmatched_count = 0
         donors_with_gifts = 0
@@ -499,11 +461,9 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
             elif matched_via == 'name':
                 matched_by_name += 1
 
-            # print concise matched line regardless of verbosity
             if donor_id and matched_via:
                 print(f"matched ({matched_via}): {leader_name} <{leader.email}> -> donor_id {donor_id}")
 
-            # gift check with cache
             if not donor_has_any_gifts_cached(api_url, api_key, donor_id, gift_cache):
                 logger.info(f"  - Donor {donor_id} found for {leader.email if leader.email else (leader.first_name + ' ' + leader.last_name)}, but no gifts")
                 um_writer.writerow([leader.coursemap_id, leader_name, leader.email, 'no gifts found'])
@@ -513,7 +473,6 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
             chosen_flag = choose_flag(leader.status, active_flag, former_flag)
             target = f"FLAG:{chosen_flag}"
 
-            # Compute old_value: list all existing flag codes the donor currently has
             existing_flags = get_existing_flags(api_url, api_key, donor_id)
             old_value = ",".join(existing_flags) if existing_flags else 'NONE'
 
@@ -526,7 +485,6 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
                     status_text = 'already-set'
                 else:
                     ok, status_text = set_flag_saveflag(api_url, api_key, donor_id, chosen_flag)
-                    # verify post-update
                     if ok:
                         verify_flags = get_existing_flags(api_url, api_key, donor_id)
                         if chosen_flag in verify_flags:
@@ -540,10 +498,8 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
             processed += 1
             if apply and did_update:
                 updated += 1
-            # be gentle to API
             time.sleep(0.2)
 
-        # append summary row to updates csv
         summary_target = f"FLAG:{active_flag}/{former_flag}"
         summary_text = (
             f"processed_total={len(leaders)} "
@@ -553,7 +509,6 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
         )
         u_writer.writerow(['', '', '', 'SUMMARY', summary_target, '', '', summary_text])
 
-    # compact end summary (always)
     print("--- summary ---")
     print(f"processed: {len(leaders)}")
     print(f"matched_by_email: {matched_by_email}")
@@ -567,20 +522,17 @@ def run(input_path: Path, apply: bool, logs_dir: Path) -> int:
     print(f"logs: {ambiguous_log}")
     return 0
 
-
 def main():
     parser = argparse.ArgumentParser(description='Tag DonorPerfect donors who are Coursemap running leaders and have donated')
     parser.add_argument('--input', required=True, help='Path to Coursemap leaders CSV produced by pullRunLeads.sh (id,first_name,last_name,email,status)')
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--apply', action='store_true', help='Apply updates')
     group.add_argument('--dry-run', dest='dry_run', action='store_true', help='Run without making changes (default)')
-    # flags-only; defaults come from env or RL/FRL
     parser.add_argument('--logs-dir', default='data/donorperfect/logs', help='Directory for output logs')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose console output (INFO)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging (most verbose)')
     args = parser.parse_args()
 
-    # Set logging level based on flags
     if getattr(args, 'debug', False):
         logger.setLevel(logging.DEBUG)
         logger.debug("debug logging enabled")
@@ -601,7 +553,5 @@ def main():
     )
     sys.exit(rc)
 
-
 if __name__ == '__main__':
     main()
-
