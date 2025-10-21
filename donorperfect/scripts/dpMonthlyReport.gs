@@ -123,7 +123,7 @@ function getConfig() {
     includedRecordTypes: recordTypes
       ? recordTypes.split(',').map(function (item) { return item.trim().toUpperCase(); }).filter(function (item) { return item; })
       : ['G', 'M'],
-    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'false').toLowerCase() === 'true',
+    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'true').toLowerCase() === 'true',
     debugEnabled: debugEnabled
   };
   if (!config.apiUrl) {
@@ -169,12 +169,22 @@ function runDpMonthlyReport(options) {
   }
   var metrics = computeMetrics(range, gifts, donorLookup, config);
   writeMetrics(range, metrics, gifts, donorLookup, config);
+  if (config && config.fallbackProceduresEnabled) {
+    logDebug(config, 'dp tip', {
+      note: 'fallback (predefined procedures) in use; contact DonorPerfect to enable Dynamic Query access for improved performance',
+      docs: 'DP_API_REF.md section on Dynamic Queries and API administration'
+    });
+  }
   logDebug(config, 'runDpMonthlyReport completed', metrics);
   console.log('dp monthly report', metrics);
   return metrics;
 }
 
 function fetchMonthlyData(range, config) {
+  // when fallback is enabled, avoid dynamic SELECT calls entirely
+  if (config && config.fallbackProceduresEnabled) {
+    return fetchMonthlyDataViaProcedures(range, config);
+  }
   var gifts = fetchMonthlyGifts(range, config);
   if (gifts.length) {
     return { gifts: gifts, donorLookup: null };
@@ -255,6 +265,10 @@ function fetchMonthlyDataViaProcedures(range, config) {
 }
 
 function fetchAllDonors(config) {
+  // honor fallback: use predefined procedures only
+  if (config && config.fallbackProceduresEnabled) {
+    return fetchAllDonorsViaProcedure(config);
+  }
   var donors = [];
   var seen = {};
   var lastDonorId = 0;
@@ -694,7 +708,8 @@ function callDonorPerfect(request, config) {
     var rawParams = paramsSegment.replace(/^&params=/, '');
     encodedParamsSegment = '&params=' + encodeFormComponent(decodeURIComponent(rawParams));
   }
-  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  // IMPORTANT: do not URL-encode the API key; many keys are pre-encoded (%xx) and double-encoding breaks auth
+  var urlFormEncoded = config.apiUrl + '?apikey=' + apiKey + '&action=' + encodedAction + encodedParamsSegment;
   logDebug(config, 'DP request', { action: action, hasParams: !!paramsSegment, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
   var response = UrlFetchApp.fetch(urlFormEncoded, {
     muteHttpExceptions: true,
@@ -712,6 +727,10 @@ function callDonorPerfect(request, config) {
   }
   var records = parseRecords(body);
   logDebug(config, 'DP parsed records', { action: action, count: records.length });
+  if (isDebugEnabled(config) && records.length === 0) {
+    var preview = body ? String(body).slice(0, 240) : '';
+    logDebug(config, 'DP response preview (empty parse)', { action: action, bodyPreview: preview });
+  }
   return records;
 }
 
@@ -744,7 +763,8 @@ function callDonorPerfectRaw(request, config) {
   var apiKey = config.apiKey;
   var encodedAction = encodeFormComponent(action);
   var encodedParamsSegment = paramsValue ? ('&params=' + encodeFormComponent(paramsValue)) : '';
-  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  // IMPORTANT: do not URL-encode the API key; many keys are pre-encoded (%xx) and double-encoding breaks auth
+  var urlFormEncoded = config.apiUrl + '?apikey=' + apiKey + '&action=' + encodedAction + encodedParamsSegment;
   logDebug(config, 'DP raw request', { action: action, hasParams: !!paramsValue, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
   var response = UrlFetchApp.fetch(urlFormEncoded, {
     muteHttpExceptions: true,
@@ -841,6 +861,85 @@ function saveDonor(donor, config) {
     }
   }
   return 0;
+}
+
+// set a DP FLAG using dp_saveflag_xml (e.g., 'RL' or 'FRL')
+function setFlagSaveflagXml(donorId, flagCode, config) {
+  var params = {
+    '@donor_id': Number(donorId || 0),
+    '@flag': String(flagCode || '').trim(),
+    '@user_id': (config && config.apiUserId) ? config.apiUserId : 'srps-monthly-report'
+  };
+  if (!params['@donor_id'] || !params['@flag']) {
+    throw new Error('setFlagSaveflagXml requires donorId and flagCode');
+  }
+  var xml = callDonorPerfectRaw({ action: 'dp_saveflag_xml', params: params }, config);
+  // success if we received a <result> payload without throwing
+  return !!xml;
+}
+
+// choose RL/FRL and apply via dp_saveflag_xml
+function tagRunLeaderFlag(donorId, isActive, config) {
+  var activeFlag = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('DP_ACTIVE_FLAG_CODE')) || 'RL';
+  var formerFlag = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('DP_FORMER_FLAG_CODE')) || 'FRL';
+  var target = isActive ? activeFlag : formerFlag;
+  var ok = setFlagSaveflagXml(donorId, target, config || getConfig());
+  logDebug(config || getConfig(), 'tagRunLeaderFlag', { donorId: donorId, flag: target, ok: ok });
+  return ok;
+}
+
+// add full dp_savegift helper mirroring documented parameters
+function saveGift(gift, config) {
+  // defaults and normalization
+  function strOrNull(v) { return v == null || v === '' ? null : String(v); }
+  function numOrZero(v) { var n = Number(v || 0); return isNaN(n) ? 0 : n; }
+  function ynOr(val, fallback) {
+    var s = String(val == null ? '' : val).toUpperCase();
+    if (s === 'Y' || s === 'N') return s;
+    return fallback;
+  }
+  var params = {
+    '@gift_id': numOrZero(gift && gift.gift_id),
+    '@donor_id': numOrZero(gift && gift.donor_id),
+    '@record_type': strOrNull(gift && gift.record_type) || 'G',
+    '@gift_date': gift && gift.gift_date instanceof Date ? ('\'' + formatDateForSql(gift.gift_date) + '\'') : (gift && gift.gift_date ? ('\'' + formatDateForSql(new Date(gift.gift_date)) + '\'') : '\'" + formatDateForSql(new Date()) + "\''),
+    '@amount': Number(gift && gift.amount || 0),
+    '@gl_code': strOrNull(gift && gift.gl_code) || 'GEN',
+    '@solicit_code': strOrNull(gift && gift.solicit_code),
+    '@sub_solicit_code': strOrNull(gift && gift.sub_solicit_code),
+    '@campaign': strOrNull(gift && gift.campaign),
+    '@gift_type': strOrNull(gift && gift.gift_type) || 'CASH',
+    '@split_gift': ynOr(gift && gift.split_gift, 'N'),
+    '@pledge_payment': ynOr(gift && gift.pledge_payment, 'N'),
+    '@reference': strOrNull(gift && gift.reference),
+    '@transaction_id': gift && gift.transaction_id ? String(gift.transaction_id) : null,
+    '@memory_honor': strOrNull(gift && gift.memory_honor),
+    '@gfname': strOrNull(gift && gift.gfname),
+    '@glname': strOrNull(gift && gift.glname),
+    '@fmv': Number(gift && gift.fmv || 0),
+    '@batch_no': Number(gift && gift.batch_no || 0),
+    '@gift_narrative': strOrNull(gift && gift.gift_narrative),
+    '@ty_letter_no': strOrNull(gift && gift.ty_letter_no) || 'TY',
+    '@glink': gift && gift.glink ? Number(gift.glink) : null,
+    '@plink': gift && gift.plink ? Number(gift.plink) : null,
+    '@nocalc': ynOr(gift && gift.nocalc, 'N'),
+    '@receipt': ynOr(gift && gift.receipt, 'N'),
+    '@old_amount': gift && gift.old_amount != null ? Number(gift.old_amount) : null,
+    '@user_id': (config && config.apiUserId) ? config.apiUserId : 'srps-monthly-report',
+    '@membership_type': strOrNull(gift && gift.membership_type),
+    '@membership_level': strOrNull(gift && gift.membership_level),
+    '@membership_enr_date': gift && gift.membership_enr_date instanceof Date ? ('\'' + formatDateForSql(gift.membership_enr_date) + '\'') : (gift && gift.membership_enr_date ? ('\'' + formatDateForSql(new Date(gift.membership_enr_date)) + '\'') : null),
+    '@membership_exp_date': gift && gift.membership_exp_date instanceof Date ? ('\'' + formatDateForSql(gift.membership_exp_date) + '\'') : (gift && gift.membership_exp_date ? ('\'' + formatDateForSql(new Date(gift.membership_exp_date)) + '\'') : null),
+    '@membership_link_ID': gift && gift.membership_link_ID ? Number(gift.membership_link_ID) : null,
+    '@address_id': gift && gift.address_id ? Number(gift.address_id) : null
+  };
+
+  // enforce gift_id default 0 for creation
+  if (!params['@gift_id']) params['@gift_id'] = 0;
+  // construct call
+  var xml = callDonorPerfectRaw({ action: 'dp_savegift', params: params }, config);
+  var giftId = extractFirstResultValue(xml);
+  return giftId ? Number(giftId) : 0;
 }
 
 function buildParamsValue(params) {
@@ -1148,4 +1247,270 @@ function fetchRunningLeadersByTeam(token) {
   });
 
   return rows;
+}
+
+// --- Leader → Team mapping and exports ---
+
+function resolveCoursemapConfig() {
+  var baseUrl = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_URL'))
+    || 'https://api.studentsrunphilly.org/api/v2';
+  var token = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('COURSEMAP_API_TOKEN'))
+    || '';
+  if (!token) {
+    throw new Error('set COURSEMAP_API_TOKEN in script properties');
+  }
+  return {
+    baseUrl: baseUrl,
+    token: token,
+    headers: {
+      'Authorization': 'Bearer ' + token,
+      'Accept': 'application/json'
+    }
+  };
+}
+
+function deriveActiveLabel(entity) {
+  function asBool(v) {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    var s = String(v || '').toLowerCase();
+    return s === 'true' || s === '1' || s === 'active' || s === 'y' || s === 'yes';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'is_active')) {
+    return asBool(entity.is_active) ? 'active' : 'inactive';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'status')) {
+    return String(entity.status).toLowerCase() === 'active' ? 'active' : 'inactive';
+  }
+  if (entity && Object.prototype.hasOwnProperty.call(entity, 'active')) {
+    return asBool(entity.active) ? 'active' : 'inactive';
+  }
+  return 'inactive';
+}
+
+function extractUsersArray(parsed) {
+  if (!parsed) return [];
+  if (parsed.data && Array.isArray(parsed.data.users)) return parsed.data.users;
+  if (Array.isArray(parsed.users)) return parsed.users;
+  if (parsed.data && Array.isArray(parsed.data.data)) return parsed.data.data;
+  if (Array.isArray(parsed.data)) return parsed.data;
+  return [];
+}
+
+function fetchActiveLeadersNormalized() {
+  var cfg = resolveCoursemapConfig();
+  var url = cfg.baseUrl + '/users/get-leaders?page=all&active=true';
+  var resp = UrlFetchApp.fetch(url, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+  var status = resp.getResponseCode();
+  var body = resp.getContentText();
+  if (status < 200 || status >= 300) {
+    throw new Error('coursemap get-leaders active failed: ' + status + ' ' + body);
+  }
+  var parsed = JSON.parse(body || '{}');
+  var users = extractUsersArray(parsed);
+  return users.map(function (u) {
+    var id = u.id || u.user_id;
+    var first = u.first_name || '';
+    var last = u.last_name || '';
+    var email = u.email || '';
+    var statusLabel = deriveActiveLabel(u);
+    return {
+      id: id,
+      first_name: first,
+      last_name: last,
+      name: (first + ' ' + last).trim().replace(/\s+/g, ' '),
+      email: email,
+      status: statusLabel
+    };
+  }).filter(function (u) { return u.status === 'active'; });
+}
+
+function readRoleName(entity) {
+  if (!entity) return '';
+  var role = (entity.role && (entity.role.name || entity.role)) || entity.role_name || entity.roleKey || entity.role_key || entity.role;
+  return String(role || '').trim();
+}
+
+function fetchAllTeamsDetailsNormalized() {
+  var cfg = resolveCoursemapConfig();
+  var teamsUrl = cfg.baseUrl + '/teams/all';
+  var teamsResp = UrlFetchApp.fetch(teamsUrl, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+  var teamsStatus = teamsResp.getResponseCode();
+  var teamsBody = teamsResp.getContentText();
+  if (teamsStatus < 200 || teamsStatus >= 300) {
+    throw new Error('coursemap teams/all failed: ' + teamsStatus + ' ' + teamsBody);
+  }
+  var teamsParsed = JSON.parse(teamsBody || '{}');
+  var rawTeams = [];
+  if (teamsParsed && Array.isArray(teamsParsed.data)) rawTeams = teamsParsed.data;
+  else if (Array.isArray(teamsParsed.teams)) rawTeams = teamsParsed.teams;
+  else if (teamsParsed && teamsParsed.data && Array.isArray(teamsParsed.data.items)) rawTeams = teamsParsed.data.items;
+
+  var teams = [];
+  rawTeams.forEach(function (team) {
+    var teamId = team && (team.id || team.team_id);
+    if (!teamId) return;
+    var teamName = (team.name || team.team_name || team.title || '').toString();
+    var detailUrl = cfg.baseUrl + '/teams/get-details/' + encodeURIComponent(teamId);
+    var detailResp = UrlFetchApp.fetch(detailUrl, { method: 'get', headers: cfg.headers, muteHttpExceptions: true });
+    if (detailResp.getResponseCode() < 200 || detailResp.getResponseCode() >= 300) {
+      return;
+    }
+    var detailBody = detailResp.getContentText();
+    var detail = JSON.parse(detailBody || '{}');
+    var data = detail && detail.data ? detail.data : detail;
+
+    var leaderCandidates = [];
+    if (data && Array.isArray(data.leaders)) {
+      leaderCandidates = data.leaders;
+    } else if (data && Array.isArray(data.team_leaders)) {
+      leaderCandidates = data.team_leaders;
+    } else if (data && Array.isArray(data.users)) {
+      leaderCandidates = data.users.filter(function (u) {
+        var roleStr = readRoleName(u).toLowerCase();
+        return roleStr === 'leader' || roleStr === 'team_leader' || roleStr === 'coach';
+      });
+    } else if (data && Array.isArray(data.members)) {
+      leaderCandidates = data.members.filter(function (m) {
+        return readRoleName(m).toLowerCase() === 'leader';
+      });
+    }
+
+    var allMembers = [];
+    if (data && Array.isArray(data.members)) {
+      allMembers = data.members.slice();
+    } else if (data && Array.isArray(data.users)) {
+      allMembers = data.users.filter(function (u) {
+        var roleStr = readRoleName(u).toLowerCase();
+        return !(roleStr === 'leader' || roleStr === 'team_leader' || roleStr === 'coach');
+      });
+    }
+
+    var normLeaders = leaderCandidates.map(function (leader) {
+      var lid = leader.id || leader.user_id;
+      var first = leader.first_name || '';
+      var last = leader.last_name || '';
+      var nm = (first + ' ' + last).trim().replace(/\s+/g, ' ');
+      if (!nm && leader.name) nm = String(leader.name).trim();
+      return {
+        id: lid,
+        name: nm,
+        email: leader.email || '',
+        status: deriveActiveLabel(leader)
+      };
+    });
+
+    var normMembers = allMembers.map(function (m) {
+      var mid = m.id || m.user_id;
+      var first = m.first_name || '';
+      var last = m.last_name || '';
+      var nm = (first + ' ' + last).trim().replace(/\s+/g, ' ');
+      if (!nm && m.name) nm = String(m.name).trim();
+      return {
+        id: mid,
+        name: nm,
+        email: m.email || '',
+        role: readRoleName(m),
+        status: deriveActiveLabel(m)
+      };
+    });
+
+    teams.push({
+      id: teamId,
+      name: teamName,
+      leaders: normLeaders,
+      members: normMembers
+    });
+  });
+
+  return teams;
+}
+
+function buildLeaderTeamMapping() {
+  var activeLeaders = fetchActiveLeadersNormalized();
+  var leaderById = {};
+  activeLeaders.forEach(function (l) { if (l && l.id) leaderById[String(l.id)] = l; });
+  var teams = fetchAllTeamsDetailsNormalized();
+
+  var leaderIdToTeams = {};
+  teams.forEach(function (team) {
+    team.leaders.forEach(function (ldr) {
+      if (!ldr || !ldr.id) return;
+      var key = String(ldr.id);
+      if (!leaderById[key]) return;
+      if (ldr.status !== 'active') return;
+      if (!leaderIdToTeams[key]) leaderIdToTeams[key] = [];
+      leaderIdToTeams[key].push({
+        id: team.id,
+        name: team.name,
+        members: team.members
+      });
+    });
+  });
+
+  var mapping = Object.keys(leaderById).map(function (id) {
+    var l = leaderById[id];
+    return {
+      leader: { id: l.id, name: l.name, email: l.email, status: l.status },
+      teams: (leaderIdToTeams[id] || [])
+    };
+  });
+  return mapping;
+}
+
+function exportLeaderTeamMappingToDriveJSON() {
+  var data = buildLeaderTeamMapping();
+  var json = JSON.stringify(data, null, 2);
+  var blob = Utilities.newBlob(json, 'application/json', 'leaders_teams_tree.json');
+  var file = DriveApp.createFile(blob);
+  Logger.log('JSON file created: ' + file.getUrl());
+  return file.getUrl();
+}
+
+function exportLeaderTeamMappingToDriveCSV() {
+  var data = buildLeaderTeamMapping();
+  var rows = [];
+  rows.push(['leader_id','leader_name','leader_email','team_id','team_name','member_id','member_name','member_email','member_role','member_status']);
+  data.forEach(function (entry) {
+    var leader = entry.leader || {};
+    var leaderId = leader.id || '';
+    var leaderName = leader.name || '';
+    var leaderEmail = leader.email || '';
+    (entry.teams || []).forEach(function (team) {
+      var teamId = team.id || '';
+      var teamName = team.name || '';
+      (team.members || []).forEach(function (m) {
+        rows.push([
+          leaderId,
+          leaderName,
+          leaderEmail,
+          teamId,
+          teamName,
+          m.id || '',
+          m.name || '',
+          m.email || '',
+          m.role || '',
+          m.status || ''
+        ]);
+      });
+      if (!(team.members && team.members.length)) {
+        rows.push([leaderId, leaderName, leaderEmail, teamId, teamName, '', '', '', '', '']);
+      }
+    });
+    if (!(entry.teams && entry.teams.length)) {
+      rows.push([leaderId, leaderName, leaderEmail, '', '', '', '', '', '', '']);
+    }
+  });
+  function csvEscape(val) {
+    var s = String(val == null ? '' : val);
+    if (/[",\n]/.test(s)) {
+      s = '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var csv = rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\n');
+  var blob = Utilities.newBlob(csv, 'text/csv', 'leaders_teams_ledger.csv');
+  var file = DriveApp.createFile(blob);
+  Logger.log('CSV file created: ' + file.getUrl());
+  return file.getUrl();
 }
