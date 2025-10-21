@@ -169,6 +169,12 @@ function runDpMonthlyReport(options) {
   }
   var metrics = computeMetrics(range, gifts, donorLookup, config);
   writeMetrics(range, metrics, gifts, donorLookup, config);
+  if (config && config.fallbackProceduresEnabled) {
+    logDebug(config, 'dp tip', {
+      note: 'fallback (predefined procedures) in use; contact DonorPerfect to enable Dynamic Query access for improved performance',
+      docs: 'DP_API_REF.md section on Dynamic Queries and API administration'
+    });
+  }
   logDebug(config, 'runDpMonthlyReport completed', metrics);
   console.log('dp monthly report', metrics);
   return metrics;
@@ -855,6 +861,31 @@ function saveDonor(donor, config) {
     }
   }
   return 0;
+}
+
+// set a DP FLAG using dp_saveflag_xml (e.g., 'RL' or 'FRL')
+function setFlagSaveflagXml(donorId, flagCode, config) {
+  var params = {
+    '@donor_id': Number(donorId || 0),
+    '@flag': String(flagCode || '').trim(),
+    '@user_id': (config && config.apiUserId) ? config.apiUserId : 'srps-monthly-report'
+  };
+  if (!params['@donor_id'] || !params['@flag']) {
+    throw new Error('setFlagSaveflagXml requires donorId and flagCode');
+  }
+  var xml = callDonorPerfectRaw({ action: 'dp_saveflag_xml', params: params }, config);
+  // success if we received a <result> payload without throwing
+  return !!xml;
+}
+
+// choose RL/FRL and apply via dp_saveflag_xml
+function tagRunLeaderFlag(donorId, isActive, config) {
+  var activeFlag = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('DP_ACTIVE_FLAG_CODE')) || 'RL';
+  var formerFlag = (typeof scriptProperties !== 'undefined' && scriptProperties.getProperty('DP_FORMER_FLAG_CODE')) || 'FRL';
+  var target = isActive ? activeFlag : formerFlag;
+  var ok = setFlagSaveflagXml(donorId, target, config || getConfig());
+  logDebug(config || getConfig(), 'tagRunLeaderFlag', { donorId: donorId, flag: target, ok: ok });
+  return ok;
 }
 
 // add full dp_savegift helper mirroring documented parameters
