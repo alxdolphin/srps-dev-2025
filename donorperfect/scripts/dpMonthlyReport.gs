@@ -694,7 +694,8 @@ function callDonorPerfect(request, config) {
     var rawParams = paramsSegment.replace(/^&params=/, '');
     encodedParamsSegment = '&params=' + encodeFormComponent(decodeURIComponent(rawParams));
   }
-  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  // IMPORTANT: do not URL-encode the API key; many keys are pre-encoded (%xx) and double-encoding breaks auth
+  var urlFormEncoded = config.apiUrl + '?apikey=' + apiKey + '&action=' + encodedAction + encodedParamsSegment;
   logDebug(config, 'DP request', { action: action, hasParams: !!paramsSegment, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
   var response = UrlFetchApp.fetch(urlFormEncoded, {
     muteHttpExceptions: true,
@@ -712,6 +713,10 @@ function callDonorPerfect(request, config) {
   }
   var records = parseRecords(body);
   logDebug(config, 'DP parsed records', { action: action, count: records.length });
+  if (isDebugEnabled(config) && records.length === 0) {
+    var preview = body ? String(body).slice(0, 240) : '';
+    logDebug(config, 'DP response preview (empty parse)', { action: action, bodyPreview: preview });
+  }
   return records;
 }
 
@@ -744,7 +749,8 @@ function callDonorPerfectRaw(request, config) {
   var apiKey = config.apiKey;
   var encodedAction = encodeFormComponent(action);
   var encodedParamsSegment = paramsValue ? ('&params=' + encodeFormComponent(paramsValue)) : '';
-  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  // IMPORTANT: do not URL-encode the API key; many keys are pre-encoded (%xx) and double-encoding breaks auth
+  var urlFormEncoded = config.apiUrl + '?apikey=' + apiKey + '&action=' + encodedAction + encodedParamsSegment;
   logDebug(config, 'DP raw request', { action: action, hasParams: !!paramsValue, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
   var response = UrlFetchApp.fetch(urlFormEncoded, {
     muteHttpExceptions: true,
