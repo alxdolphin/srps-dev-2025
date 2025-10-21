@@ -1,0 +1,44 @@
+Using Import Templates
+Several different templates to use for importing data into DonorPerfect Online.
+
+Jul 22, 2025Knowledge
+
+Using Import Templates
+Using the Import utility is a great way to speed up data entry or migration.
+
+Below you will find several different templates to use for importing data into DonorPerfect Online. When importing data for either new, or a mixture of new and existing donors, you will want to use one of the “Insert_Update” templates. This will allow you to update existing records and add new donors. The “Insert” templates will allow you to insert new transactions, including gifts, pledges, contacts, etc., for existing donors. Those imports will require the donor ID to be known for each donor in the import.
+
+A few things to note when doing imports:
+
+If the field is a coded field, the code must already exist in DonorPerfect in Code Maintenance.
+When doing an Insert only import, the Donor ID is the only field used for matching, and can only be done for existing donors.
+If a field is left blank on the import file, it will not overwrite the existing data in the field, but leave it alone.
+Each transaction must be on its own line of the file.
+You will notice that there are no import templates for Other Info transactions. These are labeled as Volunteer Hours, because those are the fields that are most often updated through an import.
+There can only be one worksheet in each import file.
+All import files must be saved as a .csv or .txt file type.
+Preparing Your File for Import
+Want to see the process in action before you do it? Watch this video on how to prepare your file for Import.
+Available Templates
+Click on the template name to download it and save it.
+ 
+
+Template Name	Description
+Insert_Update_Names_Addresses	This template can be used for importing and updating name and address information for both new and existing donors.
+Insert_Gift	This template can only be used for adding gifts to existing donor records. Therefore, the donor_id field is required.
+Insert_Update_Gifts	This template can be used for importing gifts for new and/or existing donors.
+Update_Gifts	This template can be used for updating information on existing gift records.
+Initial_Import_Names_Gifts	This template is a sample template of what an initial import of data into DonorPerfect might look like. It includes donor and gift data.
+Insert_Update_Pledges	This template can be used for importing pledges for new and/or existing donors.
+Insert_Pledge	This template can be used for importing pledges for existing donors. Therefore, the donor_id field is required.
+Insert_PledgePayment	This template can be used for importing pledge payments or gifts for existing donors.
+Update_Pledges	This template can be used updating information on existing pledge records.
+Insert_Codes	This form can be used to insert new codes into Code Maintenance.
+Update_AltAddress	This template is used for updating existing alternate addresses to an existing donor's record.
+Insert_VolunteerHours	This template can be used for importing volunteer hours as an Other Info transaction for existing donors.
+Insert_AltAddress	This template is used for adding alternate addresses to an existing donor's record.
+Insert_Update_PledgePayment	This template can be used for importing pledge payments or gifts for new and/or existing donors.
+Insert_Contact	This template can be used for importing contacts for existing donors only.
+Insert_Update_Contacts	This template can be used for importing contacts for new and/or existing donors.
+Update_Contacts	This template can be used for updating information on existing contact records.
+Insert_Update_VolunteerHours	This template can be used for importing volunteer hours as an Other Info transaction for new and/or existing donors.

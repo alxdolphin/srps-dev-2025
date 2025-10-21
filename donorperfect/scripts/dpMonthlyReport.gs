@@ -116,6 +116,7 @@ function getConfig() {
     reportSheetName: scriptProperties.getProperty('DP_REPORT_SHEET_NAME') || 'Monthly Summary',
     detailSheetName: scriptProperties.getProperty('DP_REPORT_DETAIL_SHEET_NAME') || 'Monthly Gifts',
     leaderField: scriptProperties.getProperty('DP_LEADER_FIELD') || '',
+    apiUserId: scriptProperties.getProperty('DP_API_USER_ID') || 'srps-monthly-report',
     recurringGiftTypes: recurring
       ? recurring.split(',').map(function (item) { return item.trim().toUpperCase(); }).filter(function (item) { return item; })
       : ['EFT', 'EFTCC', 'EFTACH', 'ACH', 'RECUR', 'MONTHLY'],
@@ -138,6 +139,7 @@ function getConfig() {
     reportSheetName: config.reportSheetName,
     detailSheetName: config.detailSheetName,
     leaderField: config.leaderField,
+    apiUserId: config.apiUserId,
     fallbackProceduresEnabled: config.fallbackProceduresEnabled,
     debugEnabled: config.debugEnabled
   });
@@ -722,6 +724,123 @@ function verifyDynamicQueryAccess(config) {
 
 function callDonorPerfectProcedure(action, params, config) {
   return callDonorPerfect({ action: action, params: params }, config);
+}
+
+// low-level raw fetch for cases where only a scalar value is returned
+function callDonorPerfectRaw(request, config) {
+  var action;
+  var paramsValue = '';
+  if (typeof request === 'string') {
+    action = request;
+  } else if (request && typeof request === 'object') {
+    action = request.action;
+    if (!action) {
+      throw new Error('callDonorPerfectRaw requires an action string');
+    }
+    paramsValue = buildParamsValue(request.params);
+  } else {
+    throw new Error('unsupported request type passed to callDonorPerfectRaw');
+  }
+  var apiKey = config.apiKey;
+  var encodedAction = encodeFormComponent(action);
+  var encodedParamsSegment = paramsValue ? ('&params=' + encodeFormComponent(paramsValue)) : '';
+  var urlFormEncoded = config.apiUrl + '?apikey=' + encodeFormComponent(apiKey) + '&action=' + encodedAction + encodedParamsSegment;
+  logDebug(config, 'DP raw request', { action: action, hasParams: !!paramsValue, urlPreview: config.apiUrl + '?apikey=[redacted]&action=' + encodedAction });
+  var response = UrlFetchApp.fetch(urlFormEncoded, {
+    muteHttpExceptions: true,
+    headers: {
+      'User-Agent': 'srps-dpTagRunLeads/2025.10',
+      'Accept': 'application/xml, text/xml, */*',
+      'Connection': 'close'
+    }
+  });
+  var status = response.getResponseCode();
+  var body = response.getContentText();
+  logDebug(config, 'DP raw response', { action: action, status: status, bodyLength: body ? body.length : 0 });
+  if (status !== 200) {
+    throw new Error('donorperfect request failed: ' + status + ' ' + body);
+  }
+  return body;
+}
+
+// extract the first field/@value from <result><record><field .../> for dp_savedonor style responses
+function extractFirstResultValue(xmlText) {
+  if (!xmlText || !xmlText.trim()) {
+    return null;
+  }
+  try {
+    var document = XmlService.parse(xmlText);
+    var root = document.getRootElement();
+    if (!root || String(root.getName()).toLowerCase() !== 'result') {
+      return null;
+    }
+    var records = root.getChildren('record');
+    if (!records || !records.length) {
+      return null;
+    }
+    var fields = records[0].getChildren('field');
+    if (!fields || !fields.length) {
+      return null;
+    }
+    var valAttr = fields[0].getAttribute('value');
+    return valAttr ? valAttr.getValue() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// save or update a donor using dp_savedonor named params; returns donor_id (created or existing when resolvable)
+function saveDonor(donor, config) {
+  var params = {
+    '@donor_id': Number(donor && donor.donor_id ? donor.donor_id : 0),
+    '@first_name': donor && donor.first_name ? donor.first_name : null,
+    '@last_name': donor && donor.last_name ? donor.last_name : null,
+    '@middle_name': donor && donor.middle_name ? donor.middle_name : null,
+    '@suffix': donor && donor.suffix ? donor.suffix : null,
+    '@title': donor && donor.title ? donor.title : null,
+    '@salutation': donor && donor.salutation ? donor.salutation : null,
+    '@prof_title': donor && donor.prof_title ? donor.prof_title : null,
+    '@opt_line': donor && donor.opt_line ? donor.opt_line : null,
+    '@address': donor && donor.address ? donor.address : null,
+    '@address2': donor && donor.address2 ? donor.address2 : null,
+    '@city': donor && donor.city ? donor.city : null,
+    '@state': donor && donor.state ? donor.state : null,
+    '@zip': donor && donor.zip ? donor.zip : null,
+    '@country': donor && donor.country ? donor.country : null,
+    '@address_type': donor && donor.address_type ? donor.address_type : null,
+    '@home_phone': donor && donor.home_phone ? donor.home_phone : null,
+    '@business_phone': donor && donor.business_phone ? donor.business_phone : null,
+    '@fax_phone': donor && donor.fax_phone ? donor.fax_phone : null,
+    '@mobile_phone': donor && donor.mobile_phone ? donor.mobile_phone : null,
+    '@email': donor && donor.email ? donor.email : null,
+    '@org_rec': donor && donor.org_rec ? donor.org_rec : 'N',
+    '@donor_type': donor && donor.donor_type ? donor.donor_type : 'IN',
+    '@nomail': donor && donor.nomail ? donor.nomail : 'N',
+    '@nomail_reason': donor && donor.nomail_reason ? donor.nomail_reason : null,
+    '@narrative': donor && donor.narrative ? donor.narrative : null,
+    '@donor_rcpt_type': donor && donor.donor_rcpt_type ? donor.donor_rcpt_type : null,
+    '@user_id': (config && config.apiUserId) ? config.apiUserId : 'srps-monthly-report'
+  };
+
+  var xml = callDonorPerfectRaw({ action: 'dp_savedonor', params: params }, config);
+  var returned = extractFirstResultValue(xml);
+  var numeric = returned ? Number(returned) : 0;
+  if (numeric && numeric > 0) {
+    return numeric;
+  }
+  if (params['@donor_id'] && params['@donor_id'] > 0) {
+    return Number(params['@donor_id']);
+  }
+  if (donor && donor.email) {
+    var email = String(donor.email).trim();
+    if (email) {
+      var rows = callDonorPerfect("SELECT TOP 1 donor_id FROM dp WHERE email='" + email.replace(/'/g, "''") + "'", config);
+      if (rows && rows.length && rows[0].donor_id) {
+        return Number(rows[0].donor_id);
+      }
+    }
+  }
+  return 0;
 }
 
 function buildParamsValue(params) {
