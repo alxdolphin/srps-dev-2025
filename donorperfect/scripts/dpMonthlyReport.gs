@@ -123,7 +123,7 @@ function getConfig() {
     includedRecordTypes: recordTypes
       ? recordTypes.split(',').map(function (item) { return item.trim().toUpperCase(); }).filter(function (item) { return item; })
       : ['G', 'M'],
-    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'false').toLowerCase() === 'true',
+    fallbackProceduresEnabled: String(scriptProperties.getProperty('DP_ENABLE_PROCEDURE_FALLBACK') || 'true').toLowerCase() === 'true',
     debugEnabled: debugEnabled
   };
   if (!config.apiUrl) {
