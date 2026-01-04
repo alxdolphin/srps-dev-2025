@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Sensitive configs / secrets
+secrets/
+
 # Data files
 data/raw/*.csv
 data/raw/*.xml
@@ -11,11 +14,23 @@ data/processed/*.csv
 data/processed/*.xml
 data/processed/*.json
 
+# Common export / output artifacts (privacy)
+data/
+exports/
+output/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+*.sqlite3
+
 # Temporary files
 *.tmp
 *.temp
 donors_raw_*.xml
-test_response.xmlle
+test_response.xml
 
 # Python
 __pycache__/
@@ -42,6 +57,7 @@ wheels/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~

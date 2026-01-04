@@ -1,0 +1,7 @@
+[donorperfect]
+# DP_API_URL and DP_API_KEY can be provided here or via environment variables.
+api_url = "https://www.donorperfect.net/prod/xmlrequest.asp"
+api_key = "REPLACE_ME"
+active_flag_code = "RL"
+former_flag_code = "FRL"
+
