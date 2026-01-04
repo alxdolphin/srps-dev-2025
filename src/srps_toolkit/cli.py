@@ -5,6 +5,7 @@ from pathlib import Path
 
 from srps_toolkit.common.config import apply_env, load_dotenv, load_toml
 from srps_toolkit.common.logging import configure_logging
+from srps_toolkit.coursemap.pull_leaders import cmd_coursemap_pull_leaders
 from srps_toolkit.donorperfect.tag_running_leaders import cmd_tag_running_leaders
 from srps_toolkit.venmo.ingest import cmd_venmo_ingest
 
@@ -37,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     vn_ingest = vn_sub.add_parser("ingest", help="Normalize Venmo CSV exports")
     _add_common_flags(vn_ingest)
     cmd_venmo_ingest(vn_ingest)
+
+    # coursemap
+    cm = sub.add_parser("coursemap", help="Coursemap helpers")
+    cm_sub = cm.add_subparsers(dest="coursemap_cmd", required=True)
+    cm_pull = cm_sub.add_parser("pull-leaders", help="Pull leaders roster and export CSV")
+    _add_common_flags(cm_pull)
+    cmd_coursemap_pull_leaders(cm_pull)
 
     return p
 

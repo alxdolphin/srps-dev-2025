@@ -5,3 +5,8 @@ api_key = "REPLACE_ME"
 active_flag_code = "RL"
 former_flag_code = "FRL"
 
+[coursemap]
+# COURSEMAP_API_URL and COURSEMAP_API_TOKEN can be provided here or via environment variables.
+api_url = "https://coursemap.example.org/api"
+api_token = "REPLACE_ME"
+

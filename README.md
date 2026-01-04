@@ -27,12 +27,28 @@ Environment variables take precedence over `config.toml`.
 
 ## Usage
 
+### Coursemap pull leaders roster
+
+This tool **reads Coursemap** to export a leaders roster CSV. In dry-run mode it performs **no writes**, but still makes API calls.
+
+```bash
+srps coursemap pull-leaders --dry-run --limit 5
+```
+
 ### Venmo normalize
 
 Dry-run preview:
 
 ```bash
 srps venmo ingest --input examples/venmo_sample.csv --dry-run
+```
+
+Sample output (dry-run):
+
+```text
+loaded 2 venmo rows from examples/venmo_sample.csv
+dry-run: no files written; showing first 3 normalized rows
+{'date': '2025-01-01T12:00:00Z', 'amount': '10.00', 'transaction_id': 'txn_001', 'payer': 'alex_runner', 'note': 'Donation'}
 ```
 
 Write an output CSV:

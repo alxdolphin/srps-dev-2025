@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from srps_toolkit.donorperfect.client import parse_result_records
+from srps_toolkit.coursemap.pull_leaders import extract_users, users_to_leaders
 from srps_toolkit.venmo.ingest import normalize_venmo_csv
 
 
@@ -27,4 +28,12 @@ def test_venmo_normalize_smoke(tmp_path: Path):
     rows = normalize_venmo_csv(input_csv=p, limit=10)
     assert len(rows) == 1
     assert rows[0].transaction_id == "txn_1"
+
+
+def test_coursemap_extract_users_smoke():
+    payload = {"data": {"users": [{"id": 1, "first_name": "Alex", "last_name": "Runner", "email": "a@example.org", "is_active": True}]}}
+    users = extract_users(payload)
+    leaders = users_to_leaders(users, limit=10)
+    assert len(leaders) == 1
+    assert leaders[0].status == "active"
 
